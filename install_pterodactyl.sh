@@ -1,89 +1,73 @@
 #!/bin/bash
 
-# ==============================
-# 🛠️  PTERODACTYL PANEL INSTALLER - PRO EDITION
-# ==============================
-# 📦 OS: Ubuntu 20.04 / 22.04 (root)
-# 🔗 Akses: http://<IP_KAMU>
-# 👤 Admin Otomatis: admin@example.com / Admin123!
-# ==============================
+# ========== KONFIGURASI ==========
+DB_PASSWORD="ptero123"
+PANEL_ADMIN_EMAIL="admin@localhost.com"
+PANEL_ADMIN_USER="admin"
+PANEL_ADMIN_PASSWORD="admin123"
+PTERO_VERSION="v1.11.4"
+IP_ADDR=$(curl -s ifconfig.me)
 
-# ====== 🔧 KONFIGURASI ======
-DB_NAME="panel"
-DB_USER="ptero"
-DB_PASS="StrongPassword123"
-ADMIN_EMAIL="admin@example.com"
-ADMIN_USER="admin"
-ADMIN_NAME="Admin"
-ADMIN_PASS="Admin123!"
-PANEL_PATH="/var/www/pterodactyl"
-LOG_FILE="/root/ptero-install.log"
-IP=$(curl -s ifconfig.me)
-PANEL_URL="http://${IP}"
+# ========== PREPARE ==========
+apt update && apt upgrade -y
+apt install -y software-properties-common curl apt-transport-https ca-certificates gnupg unzip git
 
-# ====== 🎨 WARNA ======
-GREEN="\e[32m"; RED="\e[31m"; YELLOW="\e[33m"; BLUE="\e[34m"; RESET="\e[0m"
+# ========== INSTALL PHP 8.1 & LOCK ==========
+add-apt-repository ppa:ondrej/php -y
+apt update
+apt install -y php8.1 php8.1-{cli,gd,mysql,mbstring,bcmath,xml,fpm,curl,zip} nginx mariadb-server redis-server
 
-# ====== 🧠 FUNGSI BANTUAN ======
-log() { echo -e "${BLUE}[INFO]${RESET} $1"; echo "[INFO] $1" >> "$LOG_FILE"; }
-success() { echo -e "${GREEN}[OK]${RESET} $1"; echo "[OK] $1" >> "$LOG_FILE"; }
-error_exit() { echo -e "${RED}[ERROR]${RESET} $1"; echo "[ERROR] $1" >> "$LOG_FILE"; exit 1; }
+# Lock PHP 8.1
+apt-mark hold php8.1 php8.1-* 
 
-# ====== ⚠️ CEK ROOT ======
-[[ $EUID -ne 0 ]] && error_exit "Script harus dijalankan sebagai root."
+# ========== DATABASE ==========
+mysql -u root <<MYSQL_SCRIPT
+CREATE DATABASE panel;
+CREATE USER 'pterodactyl'@'127.0.0.1' IDENTIFIED BY '${DB_PASSWORD}';
+GRANT ALL PRIVILEGES ON panel.* TO 'pterodactyl'@'127.0.0.1';
+FLUSH PRIVILEGES;
+MYSQL_SCRIPT
 
-touch "$LOG_FILE"
-clear
-echo -e "${YELLOW}🚀 Memulai instalasi Pterodactyl Panel - PRO Edition...${RESET}"
-
-# ====== 1. UPDATE DAN INSTALL DEPENDENSI ======
-log "Update system & install paket..."
-apt update && apt upgrade -y >> "$LOG_FILE"
-apt install -y curl wget zip unzip git nginx mariadb-server php php-cli php-mbstring php-xml php-bcmath php-curl php-mysql php-tokenizer php-common php-gd php-zip php-fpm php-pdo composer redis-server php-redis >> "$LOG_FILE" || error_exit "Gagal install paket."
-success "Semua dependensi terinstal."
-
-# ====== 2. SETUP DATABASE ======
-log "Menyiapkan database..."
-mysql -e "CREATE DATABASE IF NOT EXISTS ${DB_NAME};"
-mysql -e "CREATE USER IF NOT EXISTS '${DB_USER}'@'127.0.0.1' IDENTIFIED BY '${DB_PASS}';"
-mysql -e "GRANT ALL PRIVILEGES ON ${DB_NAME}.* TO '${DB_USER}'@'127.0.0.1';"
-mysql -e "FLUSH PRIVILEGES;"
-success "Database '${DB_NAME}' siap digunakan."
-
-# ====== 3. INSTALL PANEL ======
-log "Mengunduh dan menginstal Pterodactyl Panel..."
-mkdir -p "$PANEL_PATH" && cd "$PANEL_PATH"
-curl -Lo panel.tar.gz https://github.com/pterodactyl/panel/releases/latest/download/panel.tar.gz >> "$LOG_FILE"
-tar -xzvf panel.tar.gz >> "$LOG_FILE"
-rm panel.tar.gz
+# ========== INSTALL PANEL ==========
+cd /var/www/
+curl -Lo panel.tar.gz https://github.com/pterodactyl/panel/releases/download/${PTERO_VERSION}/panel.tar.gz
+mkdir -p /var/www/pterodactyl
+tar -xzvf panel.tar.gz -C /var/www/pterodactyl
+cd /var/www/pterodactyl
 cp .env.example .env
-composer install --no-dev --optimize-autoloader >> "$LOG_FILE"
-php artisan key:generate --force >> "$LOG_FILE"
-success "Panel berhasil diunduh dan dikonfigurasi awal."
 
-# ====== 4. KONFIGURASI ENV ======
-log "Mengatur konfigurasi environment..."
-php artisan p:environment:setup --author="${ADMIN_EMAIL}" --url="${PANEL_URL}" --timezone="Asia/Jakarta" --cache="redis" --session="file" --queue="sync" --force >> "$LOG_FILE"
-php artisan p:environment:database --host="127.0.0.1" --port=3306 --database="${DB_NAME}" --username="${DB_USER}" --password="${DB_PASS}" --force >> "$LOG_FILE"
-php artisan p:environment:mail --driver="smtp" --host="mail.example.com" --port=587 --username="noreply@example.com" --password="password" --encryption="tls" --from="noreply@example.com" --name="Pterodactyl Panel" --force >> "$LOG_FILE"
-php artisan migrate --seed --force >> "$LOG_FILE"
-php artisan storage:link >> "$LOG_FILE"
-success "Konfigurasi environment selesai."
+# ========== COMPOSER ==========
+curl -sS https://getcomposer.org/installer | php
+mv composer.phar /usr/local/bin/composer
+composer install --no-dev --optimize-autoloader
 
-# ====== 5. IZIN FILE ======
-chown -R www-data:www-data "$PANEL_PATH"
-chmod -R 755 "$PANEL_PATH/storage" "$PANEL_PATH/bootstrap/cache"
-success "Permission file OK."
+# ========== SETUP ENV ==========
+sed -i "s|APP_URL=.*|APP_URL=http://${IP_ADDR}|g" .env
 
-# ====== 6. KONFIGURASI NGINX ======
-log "Membuat konfigurasi Nginx..."
-cat > /etc/nginx/sites-available/pterodactyl <<EOF
+php artisan key:generate --force
+php artisan migrate --seed --force
+php artisan p:environment:setup -n
+php artisan p:environment:database -n
+
+php artisan p:user:make \
+  --email="${PANEL_ADMIN_EMAIL}" \
+  --username="${PANEL_ADMIN_USER}" \
+  --name="Admin" \
+  --password="${PANEL_ADMIN_PASSWORD}" \
+  --admin=1
+
+# ========== PERMISSIONS ==========
+chown -R www-data:www-data /var/www/pterodactyl/*
+chmod -R 755 /var/www/pterodactyl/storage /var/www/pterodactyl/bootstrap/cache
+
+# ========== NGINX CONFIG ==========
+cat <<EOF > /etc/nginx/sites-available/pterodactyl
 server {
     listen 80;
-    server_name _;
+    server_name ${IP_ADDR};
 
-    root ${PANEL_PATH}/public;
-    index index.php;
+    root /var/www/pterodactyl/public;
+    index index.php index.html;
 
     access_log /var/log/nginx/pterodactyl.access.log;
     error_log /var/log/nginx/pterodactyl.error.log;
@@ -92,11 +76,10 @@ server {
         try_files \$uri \$uri/ /index.php?\$query_string;
     }
 
-    location ~ \.php\$ {
+    location ~ \.php$ {
         include snippets/fastcgi-php.conf;
-        fastcgi_pass unix:/var/run/php/php$(php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;')-fpm.sock;
-        fastcgi_index index.php;
-        fastcgi_param SCRIPT_FILENAME \$realpath_root\$fastcgi_script_name;
+        fastcgi_pass unix:/run/php/php8.1-fpm.sock;
+        fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
         include fastcgi_params;
     }
 
@@ -106,17 +89,16 @@ server {
 }
 EOF
 
-ln -s /etc/nginx/sites-available/pterodactyl /etc/nginx/sites-enabled/ || true
-nginx -t >> "$LOG_FILE" && systemctl reload nginx
-success "Nginx dikonfigurasi dan aktif."
+ln -s /etc/nginx/sites-available/pterodactyl /etc/nginx/sites-enabled/
+nginx -t && systemctl reload nginx
 
-# ====== 7. ADMIN AUTO CREATE ======
-log "Membuat akun admin default..."
-php artisan p:user:make --email="${ADMIN_EMAIL}" --username="${ADMIN_USER}" --name="${ADMIN_NAME}" --password="${ADMIN_PASS}" --admin=1 >> "$LOG_FILE"
-success "Akun admin dibuat (${ADMIN_EMAIL} / ${ADMIN_PASS})."
-
-# ====== ✅ DONE ======
-echo -e "\n${GREEN}✅ INSTALASI SELESAI!${RESET}"
-echo -e "🌐 Panel tersedia di: ${YELLOW}${PANEL_URL}${RESET}"
-echo -e "👤 Login Admin: ${YELLOW}${ADMIN_EMAIL}${RESET} / ${YELLOW}${ADMIN_PASS}${RESET}"
-echo -e "📝 Log lengkap: ${LOG_FILE}\n"
+# ========== DONE ==========
+clear
+echo "==============================================="
+echo "✅ Pterodactyl Panel v${PTERO_VERSION} Installed"
+echo "🌐 Akses via: http://${IP_ADDR}"
+echo "👤 Username: ${PANEL_ADMIN_USER}"
+echo "📧 Email: ${PANEL_ADMIN_EMAIL}"
+echo "🔐 Password: ${PANEL_ADMIN_PASSWORD}"
+echo "📌 Credit: t.me/harrisskuy"
+echo "==============================================="
