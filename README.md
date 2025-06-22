@@ -36,7 +36,7 @@ sudo -i
 ### 2. Unduh dan jalankan script
 
 ```bash
-wget https://raw.githubusercontent.com/username/ptero-autoinstall/main/pterodactyl-autoinstall.sh
+wget https://raw.githubusercontent.com/harrisskuy/pterodactyl-installer/main/pterodactyl-autoinstall.sh
 chmod +x pterodactyl-autoinstall.sh
 ./pterodactyl-autoinstall.sh
 ```
