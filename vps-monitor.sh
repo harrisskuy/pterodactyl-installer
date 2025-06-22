@@ -23,7 +23,7 @@ PUBLIC_IP=$(curl -s https://api.ipify.org)
 read -r -d '' PAYLOAD <<EOF
 {
   "embeds": [{
-    "title": "📡 VPS Status Report - $HOSTNAME",
+    "title": "📡 Server Uptime - $HOSTNAME",
     "color": 3066993,
     "fields": [
       { "name": "🖥️ OS", "value": "$OS ($KERNEL)", "inline": true },
