@@ -1,6 +1,6 @@
 #!/bin/bash
 
-WEBHOOK_URL="https://discord.com/api/webhooks/xxxx"  # GANTI DENGAN WEBHOOK KAMU
+WEBHOOK_URL="https://discord.com/api/webhooks/1386193648353284166/JOa8uBH0-6bdQZF_00gHPU4W_UCq9IwSZ599MPWcbA3iN0QGOt4r-_6jotPyJ3CsKcxg"  # GANTI DENGAN WEBHOOK KAMU
 
 HOSTNAME=$(hostname)
 OS=$(uname -o)
