@@ -1,6 +1,6 @@
 #!/bin/bash
 
-WEBHOOK_URL="https://discord.com/api/webhooks/xxxxx/xxxxx"  # Ganti URL Webhook kamu
+WEBHOOK_URL="https://discord.com/api/webhooks/1386193648353284166/JOa8uBH0-6bdQZF_00gHPU4W_UCq9IwSZ599MPWcbA3iN0QGOt4r-_6jotPyJ3CsKcxg"  # Ganti URL Webhook kamu
 
 tail -n0 -F /var/log/audit/audit.log | \
 while read line; do
