@@ -1,85 +1,92 @@
 #!/bin/bash
 
-# ==================== PENGATURAN ====================
-ADMIN_EMAIL="admin@pterodactyl.local"
-ADMIN_PASSWORD="admin123"
-ADMIN_NAME="Admin Ptero"
-NODE_NAME="Node 1"
-NODE_LOCATION="Indonesia"
-NODE_FQDN=$(curl -s ipinfo.io/ip)
-DB_PASS="passwordku"
-# ===================================================
+# --------------- Konfigurasi Awal ---------------
+DB_NAME="panel"
+DB_USER="ptero"
+DB_PASS="StrongPassword123"
+PANEL_PATH="/var/www/pterodactyl"
+LOG_FILE="/root/ptero-install.log"
+IP=$(curl -s ifconfig.me)
+PANEL_URL="http://${IP}"
 
-# Warna & log simbol
-GREEN="\e[32m"
+# --------------- Warna Terminal ---------------
 RED="\e[31m"
+GREEN="\e[32m"
 YELLOW="\e[33m"
 BLUE="\e[34m"
 RESET="\e[0m"
 
-function info() {
-  echo -e "${BLUE}===================={ 🔧 $1 }====================${RESET}"
-}
-function success() {
-  echo -e "${GREEN}✅ $1${RESET}"
-}
-function error() {
-  echo -e "${RED}❌ $1${RESET}"
+log() {
+    echo -e "${BLUE}[INFO]${RESET} $1"
+    echo "[INFO] $1" >> "$LOG_FILE"
 }
 
-info "Memperbarui sistem..."
-sudo apt update && sudo apt upgrade -y
-success "Sistem berhasil diperbarui."
+success() {
+    echo -e "${GREEN}[OK]${RESET} $1"
+    echo "[OK] $1" >> "$LOG_FILE"
+}
 
-info "Menginstal dependensi dasar..."
-sudo apt install -y curl wget unzip tar git gnupg nginx mysql-server > /dev/null
-success "Dependensi dasar terinstal."
+error_exit() {
+    echo -e "${RED}[ERROR]${RESET} $1"
+    echo "[ERROR] $1" >> "$LOG_FILE"
+    exit 1
+}
 
-info "Menambahkan PPA PHP dan menginstal PHP 8.1..."
-sudo add-apt-repository ppa:ondrej/php -y && sudo apt update
-sudo apt install -y php8.1-cli php8.1-fpm php8.1-mysql php8.1-zip php8.1-bcmath php8.1-curl php8.1-mbstring php8.1-xml php8.1-gd php8.1-intl php8.1-readline php8.1-soap php8.1-redis > /dev/null
-success "PHP 8.1 dan ekstensi berhasil diinstal."
+check_root() {
+    if [[ $EUID -ne 0 ]]; then
+        error_exit "Harus dijalankan sebagai root."
+    fi
+}
 
-info "Menginstal Composer..."
-curl -sS https://getcomposer.org/installer | php && sudo mv composer.phar /usr/local/bin/composer
-success "Composer berhasil diinstal."
+# --------------- Start Install ---------------
+check_root
+touch "$LOG_FILE"
 
-info "Membuat database MySQL untuk Pterodactyl..."
-sudo mysql -e "CREATE DATABASE panel;"
-sudo mysql -e "CREATE USER 'pterodactyl'@'127.0.0.1' IDENTIFIED BY '$DB_PASS';"
-sudo mysql -e "GRANT ALL PRIVILEGES ON panel.* TO 'pterodactyl'@'127.0.0.1';"
-sudo mysql -e "FLUSH PRIVILEGES;"
-success "Database dan user MySQL berhasil dibuat."
+log "Memperbarui sistem dan menginstal dependensi..."
+apt update && apt upgrade -y >> "$LOG_FILE" 2>&1
+apt install -y curl wget zip unzip git nginx mariadb-server php php-cli php-mbstring php-xml php-bcmath php-curl php-mysql php-tokenizer php-common php-gd php-zip php-fpm php-pdo composer redis-server php-redis >> "$LOG_FILE" 2>&1 || error_exit "Gagal install dependensi."
 
-info "Mengunduh dan menyiapkan panel Pterodactyl..."
-cd /var/www/
-sudo mkdir -p pterodactyl && sudo chown -R $USER:$USER pterodactyl
-cd pterodactyl
-curl -Lo panel.tar.gz https://github.com/pterodactyl/panel/releases/latest/download/panel.tar.gz
-tar -xzvf panel.tar.gz
-composer install --no-dev --optimize-autoloader
+success "Dependensi berhasil diinstal."
+
+log "Menyiapkan database..."
+mysql -e "CREATE DATABASE IF NOT EXISTS ${DB_NAME};" >> "$LOG_FILE"
+mysql -e "CREATE USER IF NOT EXISTS '${DB_USER}'@'127.0.0.1' IDENTIFIED BY '${DB_PASS}';" >> "$LOG_FILE"
+mysql -e "GRANT ALL PRIVILEGES ON ${DB_NAME}.* TO '${DB_USER}'@'127.0.0.1';" >> "$LOG_FILE"
+mysql -e "FLUSH PRIVILEGES;" >> "$LOG_FILE"
+success "Database ${DB_NAME} berhasil dibuat."
+
+log "Mengunduh dan menyiapkan Pterodactyl Panel..."
+mkdir -p "$PANEL_PATH" && cd "$PANEL_PATH"
+curl -Lo panel.tar.gz https://github.com/pterodactyl/panel/releases/latest/download/panel.tar.gz >> "$LOG_FILE" 2>&1
+tar -xzvf panel.tar.gz >> "$LOG_FILE" 2>&1
+rm panel.tar.gz
 cp .env.example .env
-php artisan key:generate
-sed -i "s/DB_DATABASE=.*/DB_DATABASE=panel/" .env
-sed -i "s/DB_USERNAME=.*/DB_USERNAME=pterodactyl/" .env
-sed -i "s/DB_PASSWORD=.*/DB_PASSWORD=$DB_PASS/" .env
-success "Panel berhasil disiapkan."
+composer install --no-dev --optimize-autoloader >> "$LOG_FILE" 2>&1
+php artisan key:generate --force >> "$LOG_FILE"
+success "Panel berhasil diunduh dan dikonfigurasi awal."
 
-info "Migrasi dan seeding database..."
-php artisan migrate --seed --force
-success "Migrasi database selesai."
+log "Mengatur environment panel..."
+php artisan p:environment:setup --author="admin@example.com" --url="${PANEL_URL}" --timezone="Asia/Jakarta" --cache="redis" --session="file" --queue="sync" --force >> "$LOG_FILE"
+php artisan p:environment:database --host="127.0.0.1" --port=3306 --database="${DB_NAME}" --username="${DB_USER}" --password="${DB_PASS}" --force >> "$LOG_FILE"
+php artisan p:environment:mail --driver="smtp" --host="mail.example.com" --port=587 --username="noreply@example.com" --password="password" --encryption="tls" --from="noreply@example.com" --name="Pterodactyl Panel" --force >> "$LOG_FILE"
+php artisan migrate --seed --force >> "$LOG_FILE"
+php artisan storage:link >> "$LOG_FILE"
 
-info "Membuat user admin panel..."
-php artisan p:user:make --email="$ADMIN_EMAIL" --username="admin" --name="$ADMIN_NAME" --password="$ADMIN_PASSWORD" --admin=1 --no-interaction
-success "Admin berhasil dibuat."
+chown -R www-data:www-data "$PANEL_PATH"
+chmod -R 755 "$PANEL_PATH/storage" "$PANEL_PATH/bootstrap/cache"
+success "Environment dan database panel siap."
 
-info "Menyiapkan konfigurasi NGINX (tanpa domain)..."
-sudo tee /etc/nginx/sites-available/pterodactyl >/dev/null <<EOF
+log "Mengatur konfigurasi Nginx..."
+cat > /etc/nginx/sites-available/pterodactyl <<EOF
 server {
     listen 80;
     server_name _;
-    root /var/www/pterodactyl/public;
+
+    root ${PANEL_PATH}/public;
     index index.php;
+
+    access_log /var/log/nginx/pterodactyl.access.log;
+    error_log /var/log/nginx/pterodactyl.error.log;
 
     location / {
         try_files \$uri \$uri/ /index.php?\$query_string;
@@ -87,8 +94,9 @@ server {
 
     location ~ \.php\$ {
         include snippets/fastcgi-php.conf;
-        fastcgi_pass unix:/run/php/php8.1-fpm.sock;
-        fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
+        fastcgi_pass unix:/var/run/php/php$(php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;')-fpm.sock;
+        fastcgi_index index.php;
+        fastcgi_param SCRIPT_FILENAME \$realpath_root\$fastcgi_script_name;
         include fastcgi_params;
     }
 
@@ -98,63 +106,12 @@ server {
 }
 EOF
 
-sudo ln -s /etc/nginx/sites-available/pterodactyl /etc/nginx/sites-enabled/
-sudo systemctl restart nginx php8.1-fpm
-success "NGINX dikonfigurasi dan direstart."
+ln -s /etc/nginx/sites-available/pterodactyl /etc/nginx/sites-enabled/ || true
+nginx -t >> "$LOG_FILE" 2>&1 && systemctl reload nginx
+success "Nginx berhasil dikonfigurasi."
 
-info "Menginstal Docker dan Wings..."
-curl -sSL https://get.docker.com/ | CHANNEL=stable bash
-sudo systemctl enable --now docker
-sudo mkdir -p /etc/pterodactyl
-curl -Lo /usr/local/bin/wings https://github.com/pterodactyl/wings/releases/latest/download/wings_linux_amd64
-chmod +x /usr/local/bin/wings
-success "Docker & Wings terinstal."
-
-info "Membuat konfigurasi Wings..."
-cat <<EOF | sudo tee /etc/pterodactyl/config.yml >/dev/null
-debug: false
-uuid: "$(cat /proc/sys/kernel/random/uuid)"
-token_id: "$(cat /proc/sys/kernel/random/uuid)"
-token: "$(cat /proc/sys/kernel/random/uuid)"
-api:
-  host: 0.0.0.0
-  port: 8080
-system:
-  data: /var/lib/pterodactyl/volumes
-  sftp:
-    bind_address: 0.0.0.0
-    port: 2022
-  allow_offline_installations: true
-  enable_unprivileged_userns_clone: true
-EOF
-
-info "Menambahkan service systemd untuk Wings..."
-sudo tee /etc/systemd/system/wings.service >/dev/null <<EOF
-[Unit]
-Description=Pterodactyl Wings Daemon
-After=docker.service
-Requires=docker.service
-
-[Service]
-User=root
-WorkingDirectory=/etc/pterodactyl
-ExecStart=/usr/local/bin/wings
-Restart=on-failure
-LimitNOFILE=4096
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-sudo systemctl daemon-reexec
-sudo systemctl enable --now wings
-success "Wings berhasil dijalankan."
-
-# 🎉 Penutup
-IP=$(curl -s ipinfo.io/ip)
-echo -e "\n${GREEN}🎉 INSTALASI SELESAI!${RESET}"
-echo -e "${YELLOW}🌐 Akses Panel: http://$IP"
-echo -e "👤 Login Admin:"
-echo -e "   Email: $ADMIN_EMAIL"
-echo -e "   Password: $ADMIN_PASSWORD${RESET}"
-echo -e "${YELLOW}📦 Wings aktif di port 8080, SFTP di port 2022${RESET}"
+# --------------- Selesai ---------------
+echo -e "\n${GREEN}✅ INSTALASI SELESAI!${RESET}"
+echo -e "🌐 Panel dapat diakses di: ${YELLOW}${PANEL_URL}${RESET}"
+echo -e "👤 Setelah itu jalankan: ${YELLOW}php artisan p:user:make${RESET} untuk membuat akun admin."
+echo -e "📝 Log lengkap: ${LOG_FILE}"
