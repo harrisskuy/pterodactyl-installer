@@ -1,92 +1,94 @@
 #!/bin/bash
 
-set -e
+# ==================== PENGATURAN ====================
+ADMIN_EMAIL="admin@pterodactyl.local"
+ADMIN_PASSWORD="admin123"
+ADMIN_NAME="Admin Ptero"
+NODE_NAME="Node 1"
+NODE_LOCATION="Indonesia"
+NODE_FQDN=$(curl -s ipinfo.io/ip)
+DB_PASS="passwordku"
+# ===================================================
 
-### KONFIGURASI
-PANEL_DB="panel"
-PANEL_DB_USER="ptero"
-PANEL_DB_PASS="passwordku123"
-PANEL_DIR="/var/www/pterodactyl"
-PHP_VERSION="8.1"
+# Warna & log simbol
+GREEN="\e[32m"
+RED="\e[31m"
+YELLOW="\e[33m"
+BLUE="\e[34m"
+RESET="\e[0m"
 
-echo "🔧 Memperbarui sistem..."
-apt update && apt upgrade -y
+function info() {
+  echo -e "${BLUE}===================={ 🔧 $1 }====================${RESET}"
+}
+function success() {
+  echo -e "${GREEN}✅ $1${RESET}"
+}
+function error() {
+  echo -e "${RED}❌ $1${RESET}"
+}
 
-echo "📦 Menginstall dependensi..."
-apt install -y nginx mariadb-server redis-server unzip curl git tar \
-    php$PHP_VERSION php$PHP_VERSION-cli php$PHP_VERSION-gd php$PHP_VERSION-mysql \
-    php$PHP_VERSION-mbstring php$PHP_VERSION-curl php$PHP_VERSION-xml php$PHP_VERSION-bcmath \
-    php$PHP_VERSION-zip php$PHP_VERSION-fpm php$PHP_VERSION-redis
+info "Memperbarui sistem..."
+sudo apt update && sudo apt upgrade -y
+success "Sistem berhasil diperbarui."
 
-echo "📦 Menginstall Composer..."
-curl -sS https://getcomposer.org/installer | php
-mv composer.phar /usr/local/bin/composer
+info "Menginstal dependensi dasar..."
+sudo apt install -y curl wget unzip tar git gnupg nginx mysql-server > /dev/null
+success "Dependensi dasar terinstal."
 
-echo "🛠️ Mengkonfigurasi database..."
-mysql -u root <<MYSQL_SCRIPT
-CREATE DATABASE $PANEL_DB;
-CREATE USER '$PANEL_DB_USER'@'127.0.0.1' IDENTIFIED BY '$PANEL_DB_PASS';
-GRANT ALL PRIVILEGES ON $PANEL_DB.* TO '$PANEL_DB_USER'@'127.0.0.1';
-FLUSH PRIVILEGES;
-MYSQL_SCRIPT
+info "Menambahkan PPA PHP dan menginstal PHP 8.1..."
+sudo add-apt-repository ppa:ondrej/php -y && sudo apt update
+sudo apt install -y php8.1-cli php8.1-fpm php8.1-mysql php8.1-zip php8.1-bcmath php8.1-curl php8.1-mbstring php8.1-xml php8.1-gd php8.1-intl php8.1-readline php8.1-soap php8.1-redis > /dev/null
+success "PHP 8.1 dan ekstensi berhasil diinstal."
 
-echo "📁 Mengunduh dan mengekstrak Pterodactyl Panel..."
-mkdir -p $PANEL_DIR
-cd $PANEL_DIR
+info "Menginstal Composer..."
+curl -sS https://getcomposer.org/installer | php && sudo mv composer.phar /usr/local/bin/composer
+success "Composer berhasil diinstal."
+
+info "Membuat database MySQL untuk Pterodactyl..."
+sudo mysql -e "CREATE DATABASE panel;"
+sudo mysql -e "CREATE USER 'pterodactyl'@'127.0.0.1' IDENTIFIED BY '$DB_PASS';"
+sudo mysql -e "GRANT ALL PRIVILEGES ON panel.* TO 'pterodactyl'@'127.0.0.1';"
+sudo mysql -e "FLUSH PRIVILEGES;"
+success "Database dan user MySQL berhasil dibuat."
+
+info "Mengunduh dan menyiapkan panel Pterodactyl..."
+cd /var/www/
+sudo mkdir -p pterodactyl && sudo chown -R $USER:$USER pterodactyl
+cd pterodactyl
 curl -Lo panel.tar.gz https://github.com/pterodactyl/panel/releases/latest/download/panel.tar.gz
 tar -xzvf panel.tar.gz
-chown -R www-data:www-data $PANEL_DIR
-
-echo "📦 Menginstall dependensi Laravel..."
 composer install --no-dev --optimize-autoloader
-
 cp .env.example .env
+php artisan key:generate
+sed -i "s/DB_DATABASE=.*/DB_DATABASE=panel/" .env
+sed -i "s/DB_USERNAME=.*/DB_USERNAME=pterodactyl/" .env
+sed -i "s/DB_PASSWORD=.*/DB_PASSWORD=$DB_PASS/" .env
+success "Panel berhasil disiapkan."
 
-echo "⚙️ Mengatur environment file..."
-php artisan key:generate --force
-
-php artisan p:environment:setup <<EOF
-http
-$(hostname -I | awk '{print $1}')
-EOF
-
-php artisan p:environment:database <<EOF
-127.0.0.1
-3306
-$PANEL_DB
-$PANEL_DB_USER
-$PANEL_DB_PASS
-EOF
-
+info "Migrasi dan seeding database..."
 php artisan migrate --seed --force
+success "Migrasi database selesai."
 
-echo "✅ Membuat user admin..."
-php artisan p:user:make --email admin@example.com --username admin --name "Admin" --password "admin123" --admin=1
+info "Membuat user admin panel..."
+php artisan p:user:make --email="$ADMIN_EMAIL" --username="admin" --name="$ADMIN_NAME" --password="$ADMIN_PASSWORD" --admin=1 --no-interaction
+success "Admin berhasil dibuat."
 
-echo "🗂️ Mengatur izin file..."
-chown -R www-data:www-data $PANEL_DIR/*
-chmod -R 755 $PANEL_DIR/storage $PANEL_DIR/bootstrap/cache
-
-echo "⚙️ Membuat konfigurasi NGINX..."
-cat > /etc/nginx/sites-available/pterodactyl <<EOF
+info "Menyiapkan konfigurasi NGINX (tanpa domain)..."
+sudo tee /etc/nginx/sites-available/pterodactyl >/dev/null <<EOF
 server {
     listen 80;
-    server_name $(hostname -I | awk '{print $1}');
-
-    root $PANEL_DIR/public;
+    server_name _;
+    root /var/www/pterodactyl/public;
     index index.php;
-
-    access_log /var/log/nginx/pterodactyl.access.log;
-    error_log /var/log/nginx/pterodactyl.error.log error;
 
     location / {
         try_files \$uri \$uri/ /index.php?\$query_string;
     }
 
-    location ~ \.php$ {
+    location ~ \.php\$ {
         include snippets/fastcgi-php.conf;
-        fastcgi_pass unix:/run/php/php$PHP_VERSION-fpm.sock;
-        fastcgi_param SCRIPT_FILENAME \$realpath_root\$fastcgi_script_name;
+        fastcgi_pass unix:/run/php/php8.1-fpm.sock;
+        fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
         include fastcgi_params;
     }
 
@@ -96,30 +98,63 @@ server {
 }
 EOF
 
-ln -s /etc/nginx/sites-available/pterodactyl /etc/nginx/sites-enabled/
-nginx -t && systemctl reload nginx
+sudo ln -s /etc/nginx/sites-available/pterodactyl /etc/nginx/sites-enabled/
+sudo systemctl restart nginx php8.1-fpm
+success "NGINX dikonfigurasi dan direstart."
 
-echo "🕒 Menambahkan cron untuk Laravel scheduler..."
-(crontab -l ; echo "* * * * * cd $PANEL_DIR && php artisan schedule:run >> /dev/null 2>&1") | crontab -
+info "Menginstal Docker dan Wings..."
+curl -sSL https://get.docker.com/ | CHANNEL=stable bash
+sudo systemctl enable --now docker
+sudo mkdir -p /etc/pterodactyl
+curl -Lo /usr/local/bin/wings https://github.com/pterodactyl/wings/releases/latest/download/wings_linux_amd64
+chmod +x /usr/local/bin/wings
+success "Docker & Wings terinstal."
 
-echo "⚙️ Membuat systemd service untuk queue worker..."
-cat > /etc/systemd/system/pteroq.service <<EOF
+info "Membuat konfigurasi Wings..."
+cat <<EOF | sudo tee /etc/pterodactyl/config.yml >/dev/null
+debug: false
+uuid: "$(cat /proc/sys/kernel/random/uuid)"
+token_id: "$(cat /proc/sys/kernel/random/uuid)"
+token: "$(cat /proc/sys/kernel/random/uuid)"
+api:
+  host: 0.0.0.0
+  port: 8080
+system:
+  data: /var/lib/pterodactyl/volumes
+  sftp:
+    bind_address: 0.0.0.0
+    port: 2022
+  allow_offline_installations: true
+  enable_unprivileged_userns_clone: true
+EOF
+
+info "Menambahkan service systemd untuk Wings..."
+sudo tee /etc/systemd/system/wings.service >/dev/null <<EOF
 [Unit]
-Description=Pterodactyl Queue Worker
-After=redis-server.service
+Description=Pterodactyl Wings Daemon
+After=docker.service
+Requires=docker.service
 
 [Service]
-User=www-data
-Group=www-data
-Restart=always
-ExecStart=/usr/bin/php $PANEL_DIR/artisan queue:work --queue=high,default --sleep=3 --tries=3
+User=root
+WorkingDirectory=/etc/pterodactyl
+ExecStart=/usr/local/bin/wings
+Restart=on-failure
+LimitNOFILE=4096
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-systemctl enable --now pteroq.service
+sudo systemctl daemon-reexec
+sudo systemctl enable --now wings
+success "Wings berhasil dijalankan."
 
-echo "🎉 Instalasi selesai!"
-echo "💻 Akses Panel di: http://$(hostname -I | awk '{print $1}')"
-echo "🔐 Login sebagai: admin@example.com / admin123"
+# 🎉 Penutup
+IP=$(curl -s ipinfo.io/ip)
+echo -e "\n${GREEN}🎉 INSTALASI SELESAI!${RESET}"
+echo -e "${YELLOW}🌐 Akses Panel: http://$IP"
+echo -e "👤 Login Admin:"
+echo -e "   Email: $ADMIN_EMAIL"
+echo -e "   Password: $ADMIN_PASSWORD${RESET}"
+echo -e "${YELLOW}📦 Wings aktif di port 8080, SFTP di port 2022${RESET}"
